@@ -196,6 +196,20 @@ public:
 
         return writer;
     }
+
+    void dump(const std::string& name)
+    {
+        std::ofstream file(name, std::ios::out | std::ios::trunc | std::ios::binary);
+
+        auto writer = serialize();
+
+        for (size_t i = 0; i <= writer->blocks; i++)
+        {
+            file.write(writer->block[i]->buffer, 512);
+        }
+
+        file.close();
+    }
 };
 
 uint32_t filesInDirectory(const std::filesystem::path& path)
@@ -221,6 +235,7 @@ Packfile* readRPF(const std::string& rpfpath)
             if (path.filename().extension().string() == ".rpf" && path.string() != rpfpath)
             {
                 auto subrpf = readRPF(path.string());
+                subrpf->dump("rpftests/" + path.filename().string());
                 rpf->addBinary(path.filename().string(), subrpf->serialize(), subrpf->headerBlockSize() + subrpf->getDataBlockSize());
             }
             else
@@ -273,15 +288,6 @@ Packfile* readRPF(const std::string& rpfpath)
 
 int main()
 {
-    auto writer = readRPF("rpftests/in.rpf")->serialize();
-
-    std::ofstream file("rpftests/out.rpf", std::ios::out | std::ios::trunc | std::ios::binary);
-
-    for (size_t i = 0; i <= writer->blocks; i++)
-    {
-        file.write(writer->block[i]->buffer, 512);
-    }
-
-    file.close();
+    readRPF("rpftests/in.rpf")->dump("rpftests/out.rpf");
     return getchar();
 }
