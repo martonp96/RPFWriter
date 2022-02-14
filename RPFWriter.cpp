@@ -8,33 +8,6 @@
 #include "rpftypes.h"
 #include "blockwriter.h"
 
-std::vector<std::filesystem::path> readDirectory(const std::filesystem::path& path, bool root = true)
-{
-    std::vector<std::filesystem::path> structure;
-    std::vector<std::filesystem::path> directories;
-
-    structure.push_back(path);
-
-    for (const auto& entry : std::filesystem::directory_iterator(path))
-    {
-        structure.push_back(entry);
-
-        if (entry.path().extension().string() == ".rpf")
-            continue;
-
-        if (entry.is_directory())
-            directories.push_back(entry);
-    }
-
-    for (auto dir : directories)
-    {
-        auto str = readDirectory(dir, false);
-        structure.reserve(structure.size() + str.size());
-        structure.insert(structure.end(), str.begin() + 1, str.end());
-    }
-    return structure;
-}
-
 class Packfile
 {
     Header7 header;
@@ -52,7 +25,7 @@ class Packfile
     size_t dataBlockSize;
 
 public:
-    Packfile() : dataCount(0), nameTableSize(0), dataBlockSize(0), fileCount(0)
+    Packfile() : dataCount(0), nameTableSize(0), dataBlockSize(0), fileCount(0), currentDirIndex(0)
     {
         header.magic = 0x52504637;
         header.encryption = 0x4E45504F;
@@ -113,7 +86,7 @@ public:
 
     void addBinary(const std::string& name, BlockWriter* fileData, size_t len)
     {
-        printf("Adding binary %d: %s %d\n", fileCount, name.c_str(), nextBlockIndex());
+        printf("Adding binary %u: %s %d\n", fileCount, name.c_str(), nextBlockIndex());
 
         addName(name);
 
@@ -134,7 +107,7 @@ public:
 
     void addResource(const std::string& name, BlockWriter* fileData, size_t len, uint32_t sysFlags, uint32_t gfxFlags)
     {
-        printf("Adding resource %d: %s %d %d %d\n", fileCount, name.c_str(), nextBlockIndex(), sysFlags, gfxFlags);
+        printf("Adding resource %u: %s %d %u %u\n", fileCount, name.c_str(), nextBlockIndex(), sysFlags, gfxFlags);
 
         addName(name);
 
@@ -156,11 +129,6 @@ public:
         dataCount++;
     }
 
-    void reorderEntries()
-    {
-        std::unordered_map<uint32_t, Entry> newEntries;
-    }
-
     BlockWriter* serialize()
     {
         auto writer = new BlockWriter();
@@ -168,13 +136,12 @@ public:
         header.entryCount = dataCount;
         header.nameLength = ceil((double)nameTableSize / 16) * 16;
 
-        printf("Creating rpf. Entries: %d, namelen: %d\n", dataCount, nameTableSize);
+        printf("Serializing RPF. Entries: %u, namelen: %d\n", dataCount, nameTableSize);
 
         writer->write(header);
 
         for (auto& ent : entries)
         {
-            printf("entry %d\n", ent.first);
             for (auto entry : ent.second)
             {
                 writer->write(entry);
@@ -210,84 +177,104 @@ public:
 
         file.close();
     }
-};
 
-uint32_t filesInDirectory(const std::filesystem::path& path)
-{
-    uint32_t files = 0;
-    for (const auto& entry : std::filesystem::directory_iterator(path))
-        files++;
-    return files;
-}
-
-Packfile* readRPF(const std::string& rpfpath)
-{
-    auto rpf = new Packfile();
-
-    uint32_t idx = 1;
-    auto structure = readDirectory(rpfpath);
-
-    for (auto path : structure)
+    static uint32_t filesInDirectory(const std::filesystem::path& path)
     {
-        if (std::filesystem::is_directory(path))
-        {
-            //printf("Path: %s | ext: %s\n", rpfpath.c_str(), path.filename().extension().string().c_str());
-            if (path.filename().extension().string() == ".rpf" && path.string() != rpfpath)
-            {
-                auto subrpf = readRPF(path.string());
-                subrpf->dump("rpftests/" + path.filename().string());
-                rpf->addBinary(path.filename().string(), subrpf->serialize(), subrpf->headerBlockSize() + subrpf->getDataBlockSize());
-            }
-            else
-            {
-                auto numFiles = filesInDirectory(path);
-                rpf->addDirectory(idx == 1 ? "" : path.filename().string(), idx, filesInDirectory(path));
-                idx += numFiles;
-            }
-        }
-        else
-        {
-            auto writer = new BlockWriter();
-            std::ifstream file(path, std::ios::in | std::ios::binary | std::ios::ate);
-
-            std::streampos size = file.tellg();
-            file.seekg(0, std::ios::beg);
-
-            uint32_t writingSize = 0;
-            while (file)
-            {
-                auto memblock = new char[USHRT_MAX];
-                file.read(memblock, USHRT_MAX);
-
-                size_t readSize = USHRT_MAX;
-                if (!file)
-                    readSize = file.gcount();
-                
-                writer->write(*memblock, readSize);
-
-                writingSize += readSize;
-
-                //printf("reading %d of %u\n", writingSize, size);
-            }
-
-            file.close();
-
-            auto header = writer->get<uint32_t>();
-            //printf("Adding %s\n", path.filename().string().c_str());
-
-            if (header == 0x37435352)
-                rpf->addResource(path.filename().string(), writer, size, writer->get<uint32_t>(0, 8), writer->get<uint32_t>(0, 12));
-            else
-                rpf->addBinary(path.filename().string(), writer, size);
-        }
+        uint32_t files = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(path))
+            files++;
+        return files;
     }
 
-    return rpf;
-}
+    static Packfile* open(const std::string& rpfpath)
+    {
+        auto rpf = new Packfile();
 
+        uint32_t idx = 1;
+        auto structure = Packfile::readDirectory(rpfpath);
+
+        for (auto path : structure)
+        {
+            if (std::filesystem::is_directory(path))
+            {
+                if (path.filename().extension().string() == ".rpf" && path.string() != rpfpath)
+                {
+                    auto subrpf = Packfile::open(path.string());
+                    subrpf->dump("rpftests/" + path.filename().string());
+                    rpf->addBinary(path.filename().string(), subrpf->serialize(), subrpf->headerBlockSize() + subrpf->getDataBlockSize());
+                }
+                else
+                {
+                    auto numFiles = Packfile::filesInDirectory(path);
+                    rpf->addDirectory(idx == 1 ? "" : path.filename().string(), idx, numFiles);
+                    idx += numFiles;
+                }
+            }
+            else
+            {
+                auto writer = new BlockWriter();
+                std::ifstream file(path, std::ios::in | std::ios::binary);
+
+                uint32_t writingSize = 0;
+                while (file)
+                {
+                    auto memblock = new char[USHRT_MAX];
+                    file.read(memblock, USHRT_MAX);
+
+                    size_t readSize = USHRT_MAX;
+                    if (!file)
+                        readSize = file.gcount();
+
+                    writer->write(*memblock, readSize);
+                    delete[] memblock;
+
+                    writingSize += readSize;
+                }
+
+                file.close();
+
+                auto header = writer->get<uint32_t>();
+
+                if (header == 0x37435352)
+                    rpf->addResource(path.filename().string(), writer, writingSize, writer->get<uint32_t>(0, 8), writer->get<uint32_t>(0, 12));
+                else
+                    rpf->addBinary(path.filename().string(), writer, writingSize);
+            }
+        }
+
+        return rpf;
+    }
+
+    static std::vector<std::filesystem::path> readDirectory(const std::filesystem::path& path)
+    {
+        std::vector<std::filesystem::path> structure;
+        std::vector<std::filesystem::path> directories;
+
+        structure.push_back(path);
+
+        for (const auto& entry : std::filesystem::directory_iterator(path))
+        {
+            structure.push_back(entry);
+
+            if (entry.path().extension().string() == ".rpf")
+                continue;
+
+            if (entry.is_directory())
+                directories.push_back(entry);
+        }
+
+        for (auto dir : directories)
+        {
+            auto str = readDirectory(dir);
+            structure.reserve(structure.size() + str.size());
+            structure.insert(structure.end(), str.begin() + 1, str.end());
+        }
+        return structure;
+    }
+};
 
 int main()
 {
-    readRPF("rpftests/in.rpf")->dump("rpftests/out.rpf");
+    Packfile::open("rpftests/in.rpf")->dump("rpftests/out.rpf");
     return getchar();
 }
