@@ -214,7 +214,7 @@ public:
             {
                 auto writer = new BlockWriter();
                 std::ifstream file(path, std::ios::in | std::ios::binary);
-
+                
                 uint32_t writingSize = 0;
                 while (file)
                 {
@@ -233,9 +233,7 @@ public:
 
                 file.close();
 
-                auto header = writer->get<uint32_t>();
-
-                if (header == 0x37435352)
+                if (writer->get<uint32_t>() == 0x37435352)
                     rpf->addResource(path.filename().string(), writer, writingSize, writer->get<uint32_t>(0, 8), writer->get<uint32_t>(0, 12));
                 else
                     rpf->addBinary(path.filename().string(), writer, writingSize);
