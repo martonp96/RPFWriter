@@ -62,6 +62,6 @@ public:
 
     size_t size()
     {
-        return ((blocks - 1) * 512) + block[blocks - 1]->pos;
+        return (blocks * 512) + block[blocks - 1]->pos;
     }
 };

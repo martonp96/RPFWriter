@@ -114,13 +114,25 @@ public:
         Entry entry{ 0 };
         entry.res.fileOffset[0] = nextBlockIndex() & 0xFF;
         entry.res.fileOffset[1] = (nextBlockIndex() >> 8) & 0xFF;
-        entry.res.fileOffset[2] = (nextBlockIndex() >> 16) & 0xFF;
+        entry.res.fileOffset[2] = ((nextBlockIndex() >> 16) & 0xFF | 0x80);
         entry.res.nameOffset = (uint16_t)(nameTableSize - name.size() - 1);
         entry.res.systemFlags = sysFlags;
         entry.res.graphicsFlags = gfxFlags;
-        entry.res.fileSize[0] = len & 0xFF;
-        entry.res.fileSize[1] = (len >> 8) & 0xFF;
-        entry.res.fileSize[2] = (len >> 16) & 0xFF;
+
+
+        if (len > 0xFFFFFF)
+        {
+            entry.res.fileSize[0] = 0xFF;
+            entry.res.fileSize[1] = 0xFF;
+            entry.res.fileSize[2] = 0xFF;
+        }
+        else
+        {
+            entry.res.fileSize[0] = len & 0xFF;
+            entry.res.fileSize[1] = (len >> 8) & 0xFF;
+            entry.res.fileSize[2] = (len >> 16) & 0xFF;
+        }
+
 
         entries[currentDirIndex].push_back(entry);
 
@@ -201,7 +213,9 @@ public:
                 {
                     auto subrpf = Packfile::open(path.string());
                     subrpf->dump("rpftests/" + path.filename().string());
-                    rpf->addBinary(path.filename().string(), subrpf->serialize(), subrpf->headerBlockSize() + subrpf->getDataBlockSize());
+
+                    auto subrpfWriter = subrpf->serialize();
+                    rpf->addBinary(path.filename().string(), subrpfWriter, subrpfWriter->size());
                 }
                 else
                 {
